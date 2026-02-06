@@ -1,6 +1,7 @@
 import { Router } from "express";
 import Task from "../models/Task.js";
 import { requireAuth } from "../middleware/authMiddleware.js";
+import { sendError } from "../utils/errorResponse.js";
 
 const router = Router();
 
@@ -55,7 +56,7 @@ router.post("/", requireAuth, async (req, res) => {
     const { title, description, status } = req.body;
     const validationError = validateTaskInput({ title, status });
     if (validationError) {
-      return res.status(400).json({ message: validationError });
+      return sendError(res, 400, "VALIDATION_ERROR", validationError);
     }
 
     const task = await Task.create({
@@ -67,7 +68,9 @@ router.post("/", requireAuth, async (req, res) => {
 
     res.status(201).json({ message: "Task created", task });
   } catch (error) {
-    res.status(500).json({ message: "Error creating task", error: error.message });
+    return sendError(res, 500, "TASK_CREATE_FAILED", "Error creating task", [
+      error.message,
+    ]);
   }
 });
 
@@ -99,7 +102,9 @@ router.get("/", requireAuth, async (req, res) => {
     const tasks = await Task.find(filter).sort({ createdAt: -1 });
     res.status(200).json({ message: "Tasks fetched", tasks });
   } catch (error) {
-    res.status(500).json({ message: "Error fetching tasks", error: error.message });
+    return sendError(res, 500, "TASKS_FETCH_FAILED", "Error fetching tasks", [
+      error.message,
+    ]);
   }
 });
 
@@ -127,14 +132,16 @@ router.get("/:id", requireAuth, async (req, res) => {
   try {
     const task = await Task.findById(req.params.id);
     if (!task) {
-      return res.status(404).json({ message: "Task not found" });
+      return sendError(res, 404, "TASK_NOT_FOUND", "Task not found");
     }
     if (!isOwnerOrAdmin(task, req.user)) {
-      return res.status(403).json({ message: "Access denied" });
+      return sendError(res, 403, "TASK_FORBIDDEN", "Access denied");
     }
     res.status(200).json({ message: "Task fetched", task });
   } catch (error) {
-    res.status(500).json({ message: "Error fetching task", error: error.message });
+    return sendError(res, 500, "TASK_FETCH_FAILED", "Error fetching task", [
+      error.message,
+    ]);
   }
 });
 
@@ -176,15 +183,15 @@ router.put("/:id", requireAuth, async (req, res) => {
     const { title, description, status } = req.body;
     const validationError = validateTaskInput({ title, status });
     if (validationError) {
-      return res.status(400).json({ message: validationError });
+      return sendError(res, 400, "VALIDATION_ERROR", validationError);
     }
 
     const task = await Task.findById(req.params.id);
     if (!task) {
-      return res.status(404).json({ message: "Task not found" });
+      return sendError(res, 404, "TASK_NOT_FOUND", "Task not found");
     }
     if (!isOwnerOrAdmin(task, req.user)) {
-      return res.status(403).json({ message: "Access denied" });
+      return sendError(res, 403, "TASK_FORBIDDEN", "Access denied");
     }
 
     task.title = title.trim();
@@ -194,7 +201,9 @@ router.put("/:id", requireAuth, async (req, res) => {
 
     res.status(200).json({ message: "Task updated", task });
   } catch (error) {
-    res.status(500).json({ message: "Error updating task", error: error.message });
+    return sendError(res, 500, "TASK_UPDATE_FAILED", "Error updating task", [
+      error.message,
+    ]);
   }
 });
 
@@ -220,16 +229,18 @@ router.delete("/:id", requireAuth, async (req, res) => {
   try {
     const task = await Task.findById(req.params.id);
     if (!task) {
-      return res.status(404).json({ message: "Task not found" });
+      return sendError(res, 404, "TASK_NOT_FOUND", "Task not found");
     }
     if (!isOwnerOrAdmin(task, req.user)) {
-      return res.status(403).json({ message: "Access denied" });
+      return sendError(res, 403, "TASK_FORBIDDEN", "Access denied");
     }
 
     await task.deleteOne();
     res.status(200).json({ message: "Task deleted" });
   } catch (error) {
-    res.status(500).json({ message: "Error deleting task", error: error.message });
+    return sendError(res, 500, "TASK_DELETE_FAILED", "Error deleting task", [
+      error.message,
+    ]);
   }
 });
 

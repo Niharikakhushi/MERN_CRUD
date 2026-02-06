@@ -3,18 +3,29 @@ import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 import User from "../models/User.js";
 import { requireAuth, requireRole } from "../middleware/authMiddleware.js";
+import { sendError } from "../utils/errorResponse.js";
 
 const router = Router();
 const saltRounds = 10;
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-this";
 
-const validRoles = new Set(["user", "admin"]);
+const allowedSignupRoles = new Set(["user", "host"]);
 
 const sanitizeEmail = (email = "") => email.toLowerCase().trim();
 
-const validateRegister = ({ name, email, password, role }) => {
-  if (!name || !email || !password) {
-    return "Name, email, and password are required";
+const resolveName = (name, email) => {
+  const trimmed = name?.trim();
+  if (trimmed) {
+    return trimmed;
+  }
+  const normalized = sanitizeEmail(email);
+  const prefix = normalized.split("@")[0];
+  return prefix || "User";
+};
+
+const validateRegister = ({ email, password, role }) => {
+  if (!email || !password) {
+    return "Email and password are required";
   }
   if (!/^\S+@\S+\.\S+$/.test(email)) {
     return "Invalid email format";
@@ -22,8 +33,8 @@ const validateRegister = ({ name, email, password, role }) => {
   if (password.length < 6) {
     return "Password must be at least 6 characters";
   }
-  if (role && !validRoles.has(role)) {
-    return "Role must be user or admin";
+  if (role && !allowedSignupRoles.has(role)) {
+    return "Role must be user or host";
   }
   return null;
 };
@@ -56,45 +67,42 @@ const validateLogin = ({ email, password }) => {
  *         application/json:
  *           schema:
  *             type: object
- *             required: [name, email, password]
+ *             required: [email, password]
  *             properties:
- *               name:
- *                 type: string
  *               email:
  *                 type: string
  *               password:
  *                 type: string
  *               role:
  *                 type: string
- *                 enum: [user, admin]
+ *                 enum: [user, host]
  *     responses:
  *       201:
  *         description: User created
  *       400:
  *         description: Validation error
  */
-router.post("/auth/register", async (req, res) => {
+const handleSignup = async (req, res) => {
   try {
     const { name, email, password, role } = req.body;
     const validationError = validateRegister({
-      name,
       email,
       password,
       role,
     });
     if (validationError) {
-      return res.status(400).json({ message: validationError });
+      return sendError(res, 400, "VALIDATION_ERROR", validationError);
     }
 
     const normalizedEmail = sanitizeEmail(email);
     const existingUser = await User.findOne({ email: normalizedEmail });
     if (existingUser) {
-      return res.status(400).json({ message: "User already exists" });
+      return sendError(res, 400, "USER_EXISTS", "User already exists");
     }
 
     const protectedPassword = await bcrypt.hash(password, saltRounds);
     const newUser = new User({
-      name: name.trim(),
+      name: resolveName(name, normalizedEmail),
       email: normalizedEmail,
       password: protectedPassword,
       role: role || "user",
@@ -108,22 +116,49 @@ router.post("/auth/register", async (req, res) => {
     );
 
     res.status(201).json({
-      message: "User created successfully",
       token,
       user: {
         id: savedUser._id,
-        name: savedUser.name,
-        email: savedUser.email,
         role: savedUser.role,
       },
     });
   } catch (error) {
-    res.status(500).json({
-      message: "Error creating user",
-      error: error.message,
-    });
+    return sendError(res, 500, "USER_CREATE_FAILED", "Error creating user", [
+      error.message,
+    ]);
   }
-});
+};
+
+router.post("/auth/register", handleSignup);
+
+/**
+ * @swagger
+ * /auth/signup:
+ *   post:
+ *     summary: Signup a new user (user or host)
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email, password]
+ *             properties:
+ *               email:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *               role:
+ *                 type: string
+ *                 enum: [user, host]
+ *     responses:
+ *       201:
+ *         description: User created
+ *       400:
+ *         description: Validation error
+ */
+router.post("/auth/signup", handleSignup);
 
 /**
  * @swagger
@@ -154,18 +189,18 @@ router.post("/auth/login", async (req, res) => {
     const { email, password } = req.body;
     const validationError = validateLogin({ email, password });
     if (validationError) {
-      return res.status(400).json({ message: validationError });
+      return sendError(res, 400, "VALIDATION_ERROR", validationError);
     }
 
     const normalizedEmail = sanitizeEmail(email);
     const user = await User.findOne({ email: normalizedEmail });
     if (!user) {
-      return res.status(401).json({ message: "Invalid credentials" });
+      return sendError(res, 401, "AUTH_INVALID", "Invalid credentials");
     }
 
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
-      return res.status(401).json({ message: "Invalid credentials" });
+      return sendError(res, 401, "AUTH_INVALID", "Invalid credentials");
     }
 
     const token = jwt.sign(
@@ -175,20 +210,16 @@ router.post("/auth/login", async (req, res) => {
     );
 
     res.status(200).json({
-      message: "Login successful",
       token,
       user: {
         id: user._id,
-        name: user.name,
-        email: user.email,
         role: user.role,
       },
     });
   } catch (error) {
-    res.status(500).json({
-      message: "Error logging in",
-      error: error.message,
-    });
+    return sendError(res, 500, "LOGIN_FAILED", "Error logging in", [
+      error.message,
+    ]);
   }
 });
 
@@ -220,10 +251,9 @@ router.get("/users", requireAuth, requireRole("admin"), async (req, res) => {
       users,
     });
   } catch (error) {
-    res.status(500).json({
-      message: "Error fetching users",
-      error: error.message,
-    });
+    return sendError(res, 500, "USERS_FETCH_FAILED", "Error fetching users", [
+      error.message,
+    ]);
   }
 });
 
